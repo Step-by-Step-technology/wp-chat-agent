@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Assistant IA
  * Description: Assistant IA conversationnel flottant pour WordPress (OpenAI + Brave Search optionnel). Entièrement configurable depuis l'admin.
- * Version: 2.6.0
+ * Version: 2.7.0
  * Author: Step by Step
  * Author URI: https://step-by-step.technology
  * Requires at least: 5.0

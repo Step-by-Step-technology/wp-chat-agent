@@ -49,7 +49,7 @@ class AI_Assistant {
     /**
      * Plugin version
      */
-    const VERSION = '2.6.0';
+    const VERSION = '2.7.0';
     
     /**
      * Singleton instance

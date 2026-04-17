@@ -201,8 +201,8 @@ class AI_Assistant_Ajax {
         }
         $this->log( 'Réponse OpenAI OK (' . strlen( $ai_response ) . ' car.)' );
 
-        // Filtrage par thèmes.
-        $filtered = $this->filter_response_with_themes( $ai_response, $api_key );
+        // Le filtrage par thèmes est désormais géré par le system prompt (plus fiable et gratuit).
+        $filtered = $ai_response;
 
         // Journalisation si activée.
         $this->write_chat_log( $message, $filtered );
@@ -295,9 +295,33 @@ class AI_Assistant_Ajax {
     private function build_system_prompt() {
         $site_name = (string) $this->opt( 'ai_assistant_site_name', 'Assistant' );
         $site_name = str_replace( array( '"', "\n", "\r" ), array( "'", ' ', ' ' ), $site_name );
+        if ( $site_name === '' ) $site_name = 'Assistant';
 
         $p  = "Tu es l'assistant IA de « {$site_name} ».\n\n";
         $p .= "Ton rôle : aider les utilisateurs de manière utile, précise et professionnelle, en français.\n\n";
+
+        // Si le filtrage par thèmes est activé, on injecte les thèmes dans le prompt principal
+        // plutôt que de faire un second appel OpenAI (qui est fragile et coûteux).
+        if ( $this->opt( 'ai_assistant_enable_theme_filtering', 'yes' ) === 'yes' ) {
+            $themes_json = (string) $this->opt( 'ai_assistant_themes', '[]' );
+            $themes = json_decode( $themes_json, true );
+            if ( is_array( $themes ) && ! empty( $themes ) ) {
+                $p .= "DOMAINES QUE TU PEUX COUVRIR (réponds librement à toute question relevant de ces domaines, y compris les salutations, remerciements, demandes de clarification) :\n";
+                foreach ( $themes as $i => $t ) {
+                    if ( ! is_array( $t ) || ! isset( $t['name'] ) ) continue;
+                    $p .= '- ' . $t['name'];
+                    if ( ! empty( $t['description'] ) ) {
+                        $p .= ' (' . $t['description'] . ')';
+                    }
+                    $p .= "\n";
+                }
+                $out_of_scope = (string) $this->opt( 'ai_assistant_out_of_scope_message',
+                    'Désolé, cette question dépasse le périmètre de cet assistant.' );
+                $p .= "\nSi une question est clairement hors de ces domaines (politique, météo, sport, célébrités, etc.), réponds poliment : « " . $out_of_scope . " »\n";
+                $p .= "Dans le doute, réponds — mieux vaut répondre utilement que refuser à tort.\n\n";
+            }
+        }
+
         $p .= "RÈGLES :\n";
         $p .= "- Prends en compte l'intégralité de la conversation pour les questions de suivi.\n";
         $p .= "- Si des résultats de recherche web sont fournis, utilise-les pour les infos récentes.\n";
@@ -309,19 +333,26 @@ class AI_Assistant_Ajax {
 
     private function call_openai( $messages, $model, $max_tokens, $temperature, $api_key ) {
         $model = $model !== '' ? $model : 'gpt-4.1-nano';
-        $tokens = max( 50, min( 2000, $max_tokens > 0 ? $max_tokens : 400 ) );
 
         $payload = array(
             'model'    => $model,
             'messages' => $messages,
         );
 
-        // Les modèles récents (gpt-5.*, gpt-4.1-*, o1, o3…) utilisent max_completion_tokens.
-        // Les anciens (gpt-3.5-turbo, gpt-4, gpt-4o…) utilisent max_tokens.
-        if ( preg_match( '/^(gpt-5|gpt-4\.1|o1|o3|o4)/i', $model ) ) {
-            $payload['max_completion_tokens'] = $tokens;
-        } else {
-            $payload['max_tokens']  = $tokens;
+        $is_reasoning = (bool) preg_match( '/^(gpt-5|gpt-4\.1|o1|o3|o4)/i', $model );
+
+        // $max_tokens = 0 → on n'envoie aucune limite (utile pour les modèles de reasoning).
+        if ( $max_tokens > 0 ) {
+            $tokens = max( 50, min( 4000, $max_tokens ) );
+            if ( $is_reasoning ) {
+                $payload['max_completion_tokens'] = $tokens;
+            } else {
+                $payload['max_tokens'] = $tokens;
+            }
+        }
+
+        // Les modèles de reasoning n'acceptent pas temperature.
+        if ( ! $is_reasoning ) {
             $payload['temperature'] = (float) $temperature;
         }
 
@@ -350,60 +381,4 @@ class AI_Assistant_Ajax {
         return (string) $body['choices'][0]['message']['content'];
     }
 
-    private function filter_response_with_themes( $ai_response, $api_key ) {
-        if ( $this->opt( 'ai_assistant_enable_theme_filtering', 'yes' ) !== 'yes' ) {
-            return $ai_response;
-        }
-
-        $themes_json = (string) $this->opt( 'ai_assistant_themes', '[]' );
-        $themes = json_decode( $themes_json, true );
-        if ( ! is_array( $themes ) || empty( $themes ) ) {
-            return $ai_response;
-        }
-
-        $themes_list = '';
-        foreach ( $themes as $i => $t ) {
-            if ( ! is_array( $t ) || ! isset( $t['name'] ) ) continue;
-            $themes_list .= ( $i + 1 ) . '. ' . $t['name'];
-            if ( ! empty( $t['description'] ) ) {
-                $themes_list .= ' : ' . $t['description'];
-            }
-            $themes_list .= "\n";
-        }
-
-        if ( $themes_list === '' ) {
-            return $ai_response;
-        }
-
-        $filter_prompt = "Tu es un vérificateur de pertinence.\n\n"
-            . "THÈMES AUTORISÉS :\n{$themes_list}\n"
-            . "RÉPONSE À VÉRIFIER :\n{$ai_response}\n\n"
-            . 'Réponds uniquement par « OUI » si la réponse est même vaguement liée à un thème autorisé, sinon « NON ». Aucune autre sortie.';
-
-        $filter_model = (string) $this->opt( 'ai_assistant_filter_model', 'gpt-4.1-nano' );
-
-        $decision = $this->call_openai(
-            array(
-                array( 'role' => 'system', 'content' => 'Réponds uniquement par OUI ou NON.' ),
-                array( 'role' => 'user',   'content' => $filter_prompt ),
-            ),
-            $filter_model,
-            10,
-            0.1,
-            $api_key
-        );
-
-        if ( is_wp_error( $decision ) ) {
-            $this->log( 'Filtrage échoué : ' . $decision->get_error_message() );
-            return $ai_response;
-        }
-
-        $this->log( 'Décision filtrage : ' . trim( $decision ) );
-        if ( strtoupper( trim( $decision ) ) === 'OUI' ) {
-            return $ai_response;
-        }
-
-        return (string) $this->opt( 'ai_assistant_out_of_scope_message',
-            'Désolé, cette question dépasse le périmètre de cet assistant.' );
-    }
 }

@@ -230,18 +230,6 @@ class AI_Assistant_Settings {
                         'sanitize'    => array( __CLASS__, 'sanitize_themes' ),
                         'description' => 'Un thème par ligne. Format : <code>Nom du thème</code> ou <code>Nom : Description</code>.',
                     ),
-                    'ai_assistant_filter_model' => array(
-                        'label'       => 'Modèle de filtrage',
-                        'type'        => 'select',
-                        'default'     => 'gpt-4.1-nano',
-                        'sanitize'    => 'sanitize_text_field',
-                        'options'     => array(
-                            'gpt-5.4-nano' => 'GPT-5.4 Nano',
-                            'gpt-5-nano'   => 'GPT-5 Nano',
-                            'gpt-4.1-nano' => 'GPT-4.1 Nano',
-                        ),
-                        'description' => 'Modèle utilisé pour vérifier la pertinence des réponses.',
-                    ),
                     'ai_assistant_out_of_scope_message' => array(
                         'label'       => 'Message « hors périmètre »',
                         'type'        => 'textarea',
