@@ -1,0 +1,23 @@
+# Dépendances
+node_modules/
+vendor/
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Logs et builds
+*.log
+*.zip
+build/
+dist/
+
+# Fichiers temporaires de dev (ne pas commiter)
+ai-test.php
+opcache-reset.php
+last-error.log
