@@ -38,6 +38,23 @@ class AI_Assistant_Settings {
         add_action( 'wp_ajax_ai_assistant_rag_clear', array( $this, 'ajax_rag_clear' ) );
         add_action( 'wp_ajax_ai_assistant_rag_delete_post', array( $this, 'ajax_rag_delete_post' ) );
         add_action( 'wp_ajax_ai_assistant_rag_reindex_post', array( $this, 'ajax_rag_reindex_post' ) );
+        add_action( 'admin_post_ai_assistant_export_logs', array( $this, 'handle_export_logs' ) );
+    }
+
+    /**
+     * Export CSV des logs (POST admin standard, pas AJAX, pour déclencher le download).
+     */
+    public function handle_export_logs() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Accès refusé.', 403 );
+        }
+        check_admin_referer( 'ai_assistant_export_logs' );
+        if ( ! class_exists( 'AI_Assistant_Logger' ) ) {
+            wp_die( 'Module journalisation indisponible.' );
+        }
+        $search = isset( $_POST['s'] ) ? sanitize_text_field( wp_unslash( $_POST['s'] ) ) : '';
+        $ip     = isset( $_POST['ip'] ) ? sanitize_text_field( wp_unslash( $_POST['ip'] ) ) : '';
+        AI_Assistant_Logger::stream_csv( $search, $ip );
     }
 
     private function is_real_admin_request() {
@@ -977,10 +994,19 @@ class AI_Assistant_Settings {
             <?php endif; ?>
 
             <hr style="margin:30px 0;">
-            <form method="post" onsubmit="return confirm('Vider tout le journal ? Action irréversible.');">
-                <?php wp_nonce_field( 'ai_assistant_truncate_log' ); ?>
-                <button type="submit" name="ai_assistant_truncate_log" value="1" class="button button-secondary">Vider le journal</button>
-            </form>
+            <div style="display:flex; gap:15px; align-items:center;">
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <?php wp_nonce_field( 'ai_assistant_export_logs' ); ?>
+                    <input type="hidden" name="action" value="ai_assistant_export_logs" />
+                    <input type="hidden" name="s" value="<?php echo esc_attr( $search ); ?>" />
+                    <input type="hidden" name="ip" value="<?php echo esc_attr( $ip ); ?>" />
+                    <button type="submit" class="button">⬇ Exporter en CSV<?php echo ( $search || $ip ) ? ' (filtré)' : ''; ?></button>
+                </form>
+                <form method="post" onsubmit="return confirm('Vider tout le journal ? Action irréversible.');">
+                    <?php wp_nonce_field( 'ai_assistant_truncate_log' ); ?>
+                    <button type="submit" name="ai_assistant_truncate_log" value="1" class="button button-secondary">Vider le journal</button>
+                </form>
+            </div>
         </div>
         <?php
     }
@@ -1196,12 +1222,18 @@ class AI_Assistant_Settings {
 
         global $wpdb;
         $cleared = 0;
-        $like = $wpdb->esc_like( '_transient_ai_assistant_rl_' ) . '%';
-        $rows = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $like ) );
-        foreach ( $rows as $name ) {
-            $key = str_replace( '_transient_', '', $name );
-            if ( delete_transient( $key ) ) {
-                $cleared++;
+        // Nettoie les deux types de clés : IP (historique) et user_id (v2.9.3+).
+        $patterns = array(
+            $wpdb->esc_like( '_transient_ai_assistant_rl_' ) . '%',
+            $wpdb->esc_like( '_transient_timeout_ai_assistant_rl_' ) . '%',
+        );
+        foreach ( $patterns as $like ) {
+            $rows = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s", $like ) );
+            foreach ( $rows as $name ) {
+                $key = preg_replace( '/^_transient_(timeout_)?/', '', $name );
+                if ( delete_transient( $key ) ) {
+                    $cleared++;
+                }
             }
         }
         wp_send_json_success( array( 'cleared' => $cleared ) );

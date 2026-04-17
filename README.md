@@ -164,6 +164,21 @@ Une fois le plugin actif et configuré :
 
 ---
 
+## 🧪 Tests
+
+Le plugin embarque une suite de tests standalone (sans dépendance PHPUnit ni WordPress) :
+
+```bash
+php tests/run.php
+```
+
+Couvre actuellement :
+- Les *sanitizers* de la classe Settings (bool, thèmes, mots-clés)
+- Le chunking RAG (limites de taille, normalisation des espaces)
+- La similarité cosinus (cas identiques, orthogonaux, opposés, vecteur nul, tailles différentes)
+
+23 tests, exit code 0/1. Facile à brancher dans un workflow GitHub Actions.
+
 ## 🤝 Contribution
 
 Issues et pull requests bienvenues. Workflow simple :
@@ -194,6 +209,18 @@ Le crédit dans le footer du chat est désactivable depuis les réglages.
 ---
 
 ## 📦 Changelog
+
+### 2.10.0
+- Rate limit par `user_id` si utilisateur connecté (fallback IP pour les visiteurs)
+- Export CSV des conversations (avec filtres recherche/IP)
+- Suite de tests automatisés (23 tests, 0 dépendance, `php tests/run.php`)
+- Liste des contenus indexés avec actions unitaires (ré-indexer / retirer)
+
+### 2.9.x
+- RAG complet (indexation vectorielle + recherche cosinus)
+- Admin en onglets (fix critique : option_group par onglet)
+- CRON quotidien pour purge des logs
+- Fixes conversationnels + bfcache Firefox/Safari
 
 ### 2.8.0
 - Ajout du **RAG** : indexation vectorielle du contenu du site + recherche par similarité cosinus

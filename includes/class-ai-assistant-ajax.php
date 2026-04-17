@@ -279,10 +279,17 @@ class AI_Assistant_Ajax {
         $max = (int) $this->opt( 'ai_assistant_max_requests_per_hour', 10 );
         if ( $max <= 0 ) return true;
 
-        $ip  = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( (string) $_SERVER['REMOTE_ADDR'] ) : 'unknown';
-        $key = 'ai_assistant_rl_' . md5( $ip );
-        $count = (int) get_transient( $key );
+        // Si l'utilisateur est connecté, on limite par user_id (plus fiable derrière CDN/proxy).
+        // Sinon on retombe sur l'IP.
+        $uid = get_current_user_id();
+        if ( $uid > 0 ) {
+            $key = 'ai_assistant_rl_u_' . $uid;
+        } else {
+            $ip  = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( (string) $_SERVER['REMOTE_ADDR'] ) : 'unknown';
+            $key = 'ai_assistant_rl_ip_' . md5( $ip );
+        }
 
+        $count = (int) get_transient( $key );
         if ( $count >= $max ) {
             return false;
         }

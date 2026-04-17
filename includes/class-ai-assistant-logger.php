@@ -147,6 +147,63 @@ class AI_Assistant_Logger {
         global $wpdb;
         $wpdb->query( 'TRUNCATE TABLE ' . self::table_name() );
     }
+
+    /**
+     * Stream CSV de toutes les conversations (ou filtrées).
+     * Envoie les headers et écrit directement sur le flux pour éviter de tout charger en mémoire.
+     */
+    public static function stream_csv( $search = '', $ip = '' ) {
+        global $wpdb;
+        $table = self::table_name();
+
+        $where  = '1=1';
+        $params = array();
+        if ( $search !== '' ) {
+            $where   .= ' AND (question LIKE %s OR answer LIKE %s)';
+            $like     = '%' . $wpdb->esc_like( $search ) . '%';
+            $params[] = $like;
+            $params[] = $like;
+        }
+        if ( $ip !== '' ) {
+            $where   .= ' AND ip = %s';
+            $params[] = $ip;
+        }
+
+        $filename = 'chat-log-' . date( 'Y-m-d-His' ) . '.csv';
+        nocache_headers();
+        header( 'Content-Type: text/csv; charset=utf-8' );
+        header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+
+        $out = fopen( 'php://output', 'w' );
+        // BOM pour qu'Excel ouvre en UTF-8.
+        fwrite( $out, "\xEF\xBB\xBF" );
+        fputcsv( $out, array( 'id', 'date', 'ip', 'user_id', 'question', 'reponse' ), ';' );
+
+        // Streaming par pages de 500 lignes.
+        $batch = 500;
+        $offset = 0;
+        while ( true ) {
+            $sql = "SELECT id, created_at, ip, user_id, question, answer FROM {$table} WHERE {$where} ORDER BY id ASC LIMIT %d OFFSET %d";
+            $args = array_merge( $params, array( $batch, $offset ) );
+            $rows = $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A );
+            if ( empty( $rows ) ) break;
+
+            foreach ( $rows as $r ) {
+                fputcsv( $out, array(
+                    $r['id'],
+                    $r['created_at'],
+                    $r['ip'],
+                    $r['user_id'] ?: '',
+                    $r['question'],
+                    $r['answer'],
+                ), ';' );
+            }
+            $offset += $batch;
+            if ( count( $rows ) < $batch ) break;
+        }
+        fclose( $out );
+        exit;
+    }
 }
 
 // Hook CRON quotidien : purge les entrées expirées.
