@@ -21,3 +21,8 @@ dist/
 ai-test.php
 opcache-reset.php
 last-error.log
+
+# Notes / TODO privées (non versionnées)
+TODO.local.md
+NOTES.local.md
+*.local.md

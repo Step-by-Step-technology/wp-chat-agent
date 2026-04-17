@@ -6,8 +6,17 @@ jQuery(function ($) {
     'use strict';
 
     var cfg = window.aiAssistant || {};
-    var STORAGE_KEY = 'ai_assistant_chat_v2';
+    var STORAGE_KEY = 'ai_assistant_chat_v3';
     var storage = getStorage(cfg.persistence);
+
+    // Nettoyage : supprime toute ancienne version de stockage (v1, v2, etc.)
+    // qui pourrait contenir des messages de test/debug obsolètes.
+    try {
+        ['ai_assistant_chat', 'ai_assistant_chat_v1', 'ai_assistant_chat_v2'].forEach(function(k){
+            if (window.sessionStorage) window.sessionStorage.removeItem(k);
+            if (window.localStorage)   window.localStorage.removeItem(k);
+        });
+    } catch(e) {}
 
     var state = loadState();
     var lastDebugLogs = [];
@@ -67,6 +76,24 @@ jQuery(function ($) {
         return $('<div>').text(str == null ? '' : String(str)).html();
     }
 
+    /**
+     * Retourne true si l'URL pointe vers le même domaine racine que la page courante.
+     * Compare les hostnames en ignorant le préfixe "www." pour que
+     * example.com et www.example.com soient considérés identiques.
+     */
+    function isInternalUrl(url) {
+        if (!url) return false;
+        if (url.charAt(0) === '/' || url.charAt(0) === '#') return true;
+        try {
+            var u = new URL(url, window.location.href);
+            var a = u.hostname.replace(/^www\./, '').toLowerCase();
+            var b = window.location.hostname.replace(/^www\./, '').toLowerCase();
+            return a === b;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function markdownToHtml(text) {
         var html = escapeHtml(text);
         html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -78,8 +105,16 @@ jQuery(function ($) {
         html = html.replace(/^# (.*)$/gm, '<h2>$1</h2>');
         html = html.replace(/^[-*] (.*)$/gm, '<li>$1</li>');
         html = html.replace(/(<li>.*<\/li>(\n|$))+/g, '<ul>$&</ul>');
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, txt, url) {
-            return '<a href="' + encodeURI(url) + '" target="_blank" rel="noopener">' + txt + '</a>';
+        // Liens markdown [texte](url) — traité AVANT les URLs brutes.
+        // Même domaine → même onglet. Domaine différent → nouvel onglet.
+        html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, txt, url) {
+            var attrs = isInternalUrl(url) ? '' : ' target="_blank" rel="noopener"';
+            return '<a href="' + encodeURI(url) + '"' + attrs + '>' + txt + '</a>';
+        });
+        // Auto-linkification des URLs brutes (http/https) non déjà dans un <a>.
+        html = html.replace(/(^|[^"'>=])((?:https?:\/\/)[^\s<]+[^\s<.,;:!?)])/g, function (_, prefix, url) {
+            var attrs = isInternalUrl(url) ? '' : ' target="_blank" rel="noopener"';
+            return prefix + '<a href="' + encodeURI(url) + '"' + attrs + '>' + url + '</a>';
         });
         html = html.replace(/\n/g, '<br>');
         return html;
@@ -386,4 +421,37 @@ jQuery(function ($) {
     // ───────── Init ─────────
 
     buildWidget();
+
+    // Firefox / Safari : bfcache restaure la page telle qu'à sa sortie.
+    // On force un reload depuis le storage à chaque affichage de page pour être cohérent.
+    window.addEventListener('pageshow', function () {
+        state = loadState();
+        restoreMessages();
+        if (state.opened) {
+            $('#ai-chat-widget').show();
+            $('#ai-chat-bubble').hide();
+            setTimeout(scrollToBottom, 50);
+        } else {
+            $('#ai-chat-widget').hide();
+            $('#ai-chat-bubble').show();
+        }
+    });
+
+    // Focus de la fenêtre : re-synchronise aussi (utile si plusieurs onglets en mode "local").
+    window.addEventListener('focus', function () {
+        var fresh = loadState();
+        if (JSON.stringify(fresh.messages) !== JSON.stringify(state.messages)) {
+            state = fresh;
+            restoreMessages();
+        }
+    });
+
+    // Synchronisation inter-onglets (mode "local" uniquement) :
+    // si un autre onglet ajoute un message, on re-synchronise.
+    window.addEventListener('storage', function (ev) {
+        if (ev.key === STORAGE_KEY && cfg.persistence === 'local') {
+            state = loadState();
+            restoreMessages();
+        }
+    });
 });

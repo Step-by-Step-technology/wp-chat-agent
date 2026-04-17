@@ -13,6 +13,7 @@ Plugin WordPress open-source qui ajoute un **chat assistant conversationnel** pr
 - 💬 **Chat flottant** en bas à droite, responsive, personnalisable
 - 🧠 **Intégration OpenAI** : GPT-5.4 Nano, GPT-5 Nano, GPT-4.1 Nano (et compatibilité modèles plus anciens)
 - 🔍 **Recherche web optionnelle** via Brave Search API (déclenchée par mots-clés configurables)
+- 🧠 **RAG (Retrieval-Augmented Generation)** : indexation vectorielle du contenu WP (posts, pages, CPT), l'IA répond avec précision en s'appuyant sur **votre** contenu
 - 💾 **Persistance de la conversation** entre pages : `session` (par onglet), `local` (multi-sessions avec TTL) ou désactivée
 - 🎯 **Filtrage par thèmes** : restreint les réponses à une liste de sujets autorisés (deuxième appel OpenAI pour valider la pertinence)
 - 📞 **Boutons de contact** (téléphone + page contact) affichés selon la longueur de réponse
@@ -48,19 +49,48 @@ Plugin WordPress open-source qui ajoute un **chat assistant conversationnel** pr
 
 ## ⚙️ Configuration
 
-Toute la config est dans **Assistant IA → Réglages**, regroupée en 7 sections :
+Toute la config est dans **Assistant IA → Réglages**, organisée en **onglets** :
 
-| Section | Contenu |
+| Onglet | Contenu |
 |---|---|
 | **Clés API et modèles** | Clé OpenAI, clé Brave, modèle principal, longueur max. des réponses |
-| **Apparence et identité** | Nom de l'assistant, message de bienvenue, placeholder, couleur principale |
+| **Apparence et identité** | Nom de l'assistant, message de bienvenue, placeholder, couleur principale, crédit auteur |
 | **Boutons de contact** | Numéro tél., URL page contact, seuil d'affichage |
 | **Persistance de la conversation** | Mode session/local/désactivée, durée, taille de l'historique |
-| **Filtrage par thèmes** | Activation, liste des thèmes, modèle de filtrage, message hors-périmètre |
+| **Filtrage par thèmes** | Activation, liste des thèmes, message hors-périmètre |
+| **RAG — Connaissance du site** | Activation, modèle d'embedding, types de contenu, taille des chunks, nb chunks injectés |
 | **Mots-clés de recherche web** | Liste des déclencheurs |
 | **Sécurité et débogage** | Rate limit, mode debug, journalisation, rétention |
 
-Un bouton **« Tester maintenant »** en haut de la page valide la connexion OpenAI (clé + modèle) sans passer par le chat.
+Un bouton **« Tester maintenant »** sur l'onglet *Clés API* valide la connexion OpenAI (clé + modèle) sans passer par le chat.
+
+Le menu **Assistant IA** contient aussi :
+- **Journal** — consultation des conversations (si journalisation activée)
+- **Indexation RAG** — statut de l'index, bouton d'indexation, bouton de vidage
+
+## 🧠 RAG — Mode d'emploi
+
+Le RAG permet à l'assistant de répondre avec **votre contenu** (articles, pages, custom post types), au lieu de rester cantonné à sa connaissance générale.
+
+### Workflow
+
+1. **Configurer la clé API OpenAI** (onglet *Clés API*)
+2. **Onglet RAG** : activer, choisir le modèle d'embedding, définir les types de contenu à indexer
+3. **Aller sur Assistant IA → Indexation RAG → Indexer tout le site**
+4. Une fois indexé, chaque modification d'article déclenche une ré-indexation automatique (hook `save_post`)
+
+### Comment ça marche
+
+À chaque question utilisateur :
+1. La question est vectorisée (embedding OpenAI)
+2. Les N chunks les plus proches dans l'index sont récupérés (similarité cosinus)
+3. Ils sont injectés dans le prompt de l'IA comme contexte
+4. L'IA répond en s'appuyant sur ces extraits
+
+### Coûts
+
+- **Indexation** : ~0,02 $ pour 100 pages avec `text-embedding-3-small`
+- **Par question** : 1 embedding de question (~0,00002 $) + le chat (tarif normal du modèle choisi)
 
 ---
 
@@ -75,7 +105,8 @@ wp-ai-cgc-assistant/
 │   ├── class-ai-assistant-ajax.php      # Endpoint AJAX + appels OpenAI (compat max_completion_tokens)
 │   ├── class-ai-assistant-assets.php    # Enqueue CSS/JS + CSS dynamique
 │   ├── class-ai-assistant-search.php    # Intégration Brave Search
-│   └── class-ai-assistant-logger.php    # Table DB + rétention des logs
+│   ├── class-ai-assistant-logger.php    # Table DB + rétention des logs
+│   └── class-ai-assistant-rag.php       # Indexation vectorielle + recherche cosinus
 ├── assets/
 │   ├── css/chat.css
 │   ├── js/chat.js                       # Widget + persistance (session/localStorage) + XSS-safe
@@ -163,6 +194,18 @@ Le crédit dans le footer du chat est désactivable depuis les réglages.
 ---
 
 ## 📦 Changelog
+
+### 2.8.0
+- Ajout du **RAG** : indexation vectorielle du contenu du site + recherche par similarité cosinus
+- Nouvelle page admin « Indexation RAG » avec barre de progression
+- Ré-indexation automatique sur `save_post`
+- **Admin en onglets** : 8 sections regroupées, navigation plus claire
+- Nouveau réglage : modèle d'embedding, types de contenu, taille des chunks, nb chunks injectés
+
+### 2.7.0
+- Simplification du filtrage par thèmes : injection dans le system prompt au lieu d'un second appel OpenAI
+- Plus fiable sur les salutations / questions courtes, plus rapide, moins coûteux
+- Suppression du réglage « Modèle de filtrage » (devenu inutile)
 
 ### 2.6.0
 - Suppression de toutes les références hardcodées (CG Consulting, cgconsulting.corsica, numéros de tél.)

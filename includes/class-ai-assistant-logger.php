@@ -72,10 +72,22 @@ class AI_Assistant_Logger {
             ),
             array( '%s', '%s', '%d', '%s', '%s' )
         );
+    }
 
-        // Purge opportuniste (1 fois sur 50).
-        if ( mt_rand( 1, 50 ) === 1 ) {
-            self::purge_old();
+    /**
+     * Planifie le CRON quotidien de purge si non planifié.
+     * À appeler à l'activation du plugin ou au chargement.
+     */
+    public static function schedule_cron() {
+        if ( ! wp_next_scheduled( 'ai_assistant_log_purge_cron' ) ) {
+            wp_schedule_event( time() + 300, 'daily', 'ai_assistant_log_purge_cron' );
+        }
+    }
+
+    public static function unschedule_cron() {
+        $timestamp = wp_next_scheduled( 'ai_assistant_log_purge_cron' );
+        if ( $timestamp ) {
+            wp_unschedule_event( $timestamp, 'ai_assistant_log_purge_cron' );
         }
     }
 
@@ -136,3 +148,6 @@ class AI_Assistant_Logger {
         $wpdb->query( 'TRUNCATE TABLE ' . self::table_name() );
     }
 }
+
+// Hook CRON quotidien : purge les entrées expirées.
+add_action( 'ai_assistant_log_purge_cron', array( 'AI_Assistant_Logger', 'purge_old' ) );

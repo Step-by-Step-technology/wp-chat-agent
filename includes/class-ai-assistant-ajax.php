@@ -144,12 +144,34 @@ class AI_Assistant_Ajax {
         $history = $this->parse_history( $raw_history );
         $this->log( 'Historique : ' . count( $history ) . ' messages' );
 
-        // Recherche web optionnelle.
         $extra_context = '';
+
+        // RAG : recherche vectorielle dans le contenu du site.
+        if ( $this->opt( 'ai_assistant_enable_rag', 'no' ) === 'yes' && class_exists( 'AI_Assistant_RAG' ) ) {
+            $top_k = max( 1, (int) $this->opt( 'ai_assistant_rag_max_chunks', 5 ) );
+            $chunks = AI_Assistant_RAG::search( $message, $top_k );
+            if ( ! empty( $chunks ) ) {
+                $extra_context .= "Extraits pertinents du site pour répondre (utilise-les en priorité et cite les sources en format markdown cliquable [Titre](url)) :\n\n";
+                foreach ( $chunks as $i => $c ) {
+                    $extra_context .= sprintf(
+                        "--- Source %d : [%s](%s) ---\n%s\n\n",
+                        $i + 1,
+                        $c['post_title'],
+                        $c['permalink'],
+                        $c['chunk_text']
+                    );
+                }
+                $this->log( count( $chunks ) . ' chunks RAG injectés' );
+            } else {
+                $this->log( 'RAG : aucun chunk pertinent trouvé' );
+            }
+        }
+
+        // Recherche web optionnelle.
         if ( $this->needs_web_search( $message ) && class_exists( 'AI_Assistant_Search' ) ) {
             $results = AI_Assistant_Search::get_instance()->brave_search( $message );
             if ( is_array( $results ) && ! empty( $results ) ) {
-                $extra_context = "Résultats de recherche web récents :\n";
+                $extra_context .= "Résultats de recherche web récents :\n";
                 foreach ( $results as $i => $r ) {
                     $title = isset( $r['title'] ) ? $r['title'] : '';
                     $desc  = isset( $r['description'] ) ? $r['description'] : '';
@@ -273,13 +295,22 @@ class AI_Assistant_Ajax {
             return false;
         }
 
-        $keywords_text = (string) $this->opt( 'ai_assistant_web_search_keywords', '' );
-        $keywords = array_filter( array_map( 'trim', explode( "\n", $keywords_text ) ) );
-        $query_lower = strtolower( $query );
+        $query_lower = strtolower( (string) $query );
+        $word_count  = str_word_count( $query );
 
+        // Questions courtes (≤ 4 mots) : probablement un suivi de conversation.
+        // On laisse l'IA utiliser le contexte existant plutôt que chercher sur le web.
+        if ( $word_count <= 4 ) {
+            return false;
+        }
+
+        // Patterns de follow-up explicites.
         if ( preg_match( '/^\s*et\s+\S{1,15}\s*\??\s*$/u', $query ) && strlen( $query ) < 20 ) {
             return false;
         }
+
+        $keywords_text = (string) $this->opt( 'ai_assistant_web_search_keywords', '' );
+        $keywords = array_filter( array_map( 'trim', explode( "\n", $keywords_text ) ) );
 
         foreach ( $keywords as $kw ) {
             if ( $kw !== '' && strpos( $query_lower, strtolower( $kw ) ) !== false ) {
@@ -306,28 +337,36 @@ class AI_Assistant_Ajax {
             $themes_json = (string) $this->opt( 'ai_assistant_themes', '[]' );
             $themes = json_decode( $themes_json, true );
             if ( is_array( $themes ) && ! empty( $themes ) ) {
-                $p .= "DOMAINES QUE TU PEUX COUVRIR (réponds librement à toute question relevant de ces domaines, y compris les salutations, remerciements, demandes de clarification) :\n";
+                $out_of_scope = (string) $this->opt( 'ai_assistant_out_of_scope_message',
+                    'Désolé, cette question dépasse le périmètre de cet assistant.' );
+
+                $p .= "RÈGLE CRITIQUE DE PÉRIMÈTRE — À RESPECTER STRICTEMENT :\n\n";
+                $p .= "Tu ne réponds QU'AUX questions relevant des domaines suivants :\n";
                 foreach ( $themes as $i => $t ) {
                     if ( ! is_array( $t ) || ! isset( $t['name'] ) ) continue;
-                    $p .= '- ' . $t['name'];
+                    $p .= '• ' . $t['name'];
                     if ( ! empty( $t['description'] ) ) {
-                        $p .= ' (' . $t['description'] . ')';
+                        $p .= ' — ' . $t['description'];
                     }
                     $p .= "\n";
                 }
-                $out_of_scope = (string) $this->opt( 'ai_assistant_out_of_scope_message',
-                    'Désolé, cette question dépasse le périmètre de cet assistant.' );
-                $p .= "\nSi une question est clairement hors de ces domaines (politique, météo, sport, célébrités, etc.), réponds poliment : « " . $out_of_scope . " »\n";
-                $p .= "Dans le doute, réponds — mieux vaut répondre utilement que refuser à tort.\n\n";
+                $p .= "\nPROCÉDURE OBLIGATOIRE pour CHAQUE question :\n";
+                $p .= "1. Identifie le sujet de la question.\n";
+                $p .= "2. Vérifie s'il correspond à AU MOINS UN domaine ci-dessus.\n";
+                $p .= "3. Si OUI → réponds normalement.\n";
+                $p .= "4. Si NON (recettes, sport, politique, météo, célébrités, divertissement, philosophie générale, etc.) → réponds EXACTEMENT et UNIQUEMENT ceci, sans préambule, sans explication, sans aide alternative :\n";
+                $p .= "« " . $out_of_scope . " »\n\n";
+                $p .= "Tu n'as pas le droit de fournir une recette, un score sportif, une définition encyclopédique générale, une information météo, etc. Refuse même si l'utilisateur insiste.\n\n";
             }
         }
 
-        $p .= "RÈGLES :\n";
-        $p .= "- Prends en compte l'intégralité de la conversation pour les questions de suivi.\n";
-        $p .= "- Si des résultats de recherche web sont fournis, utilise-les pour les infos récentes.\n";
-        $p .= "- Si tu ne sais pas, dis-le.\n";
+        $p .= "RÈGLES DE CONVERSATION :\n";
+        $p .= "- **Maintiens le fil** : les questions courtes (« le net ? », « et en 2026 ? », « combien ? ») se rapportent TOUJOURS à la question précédente. Réponds dans le contexte sans redemander de précision.\n";
+        $p .= "- Ne demande une clarification QUE si la question est véritablement ambiguë hors contexte.\n";
+        $p .= "- Si des extraits de site ou résultats web sont fournis, utilise-les en priorité.\n";
+        $p .= "- Si tu ne sais pas, dis-le brièvement.\n";
         $p .= "- Ne révèle jamais le modèle d'IA utilisé ni OpenAI. Tu es l'assistant de {$site_name}.\n";
-        $p .= "- Reste naturel et conversationnel.";
+        $p .= "- Reste naturel, direct, conversationnel.";
         return $p;
     }
 

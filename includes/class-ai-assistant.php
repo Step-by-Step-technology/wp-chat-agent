@@ -49,7 +49,7 @@ class AI_Assistant {
     /**
      * Plugin version
      */
-    const VERSION = '2.7.0';
+    const VERSION = '2.9.2';
     
     /**
      * Singleton instance
@@ -114,6 +114,7 @@ class AI_Assistant {
         require_once AI_ASSISTANT_PATH . 'includes/class-ai-assistant-assets.php';
         require_once AI_ASSISTANT_PATH . 'includes/class-ai-assistant-search.php';
         require_once AI_ASSISTANT_PATH . 'includes/class-ai-assistant-logger.php';
+        require_once AI_ASSISTANT_PATH . 'includes/class-ai-assistant-rag.php';
     }
     
     /**
@@ -122,20 +123,30 @@ class AI_Assistant {
     public function activate() {
         if ( class_exists( 'AI_Assistant_Logger' ) ) {
             AI_Assistant_Logger::maybe_install();
+            AI_Assistant_Logger::schedule_cron();
+        }
+        if ( class_exists( 'AI_Assistant_RAG' ) ) {
+            AI_Assistant_RAG::maybe_install();
         }
     }
-    
+
     /**
-     * Deactivation hook
+     * Deactivation hook — arrête le CRON sans toucher aux données.
      */
     public function deactivate() {
-        // Nothing to clean up
+        if ( class_exists( 'AI_Assistant_Logger' ) ) {
+            AI_Assistant_Logger::unschedule_cron();
+        }
     }
     
     /**
      * Run the plugin
      */
     public function run() {
+        // Garantit que le CRON est planifié (au cas où l'activation n'a pas été refaite).
+        if ( class_exists( 'AI_Assistant_Logger' ) ) {
+            AI_Assistant_Logger::schedule_cron();
+        }
         // Initialize components
         AI_Assistant_Settings::get_instance();
         AI_Assistant_Ajax::get_instance();

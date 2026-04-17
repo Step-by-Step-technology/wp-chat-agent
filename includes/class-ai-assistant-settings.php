@@ -34,6 +34,10 @@ class AI_Assistant_Settings {
         // Bouton de test OpenAI (AJAX admin seulement, utilisateur authentifié admin).
         add_action( 'wp_ajax_ai_assistant_test_openai', array( $this, 'ajax_test_openai' ) );
         add_action( 'wp_ajax_ai_assistant_reset_rate_limit', array( $this, 'ajax_reset_rate_limit' ) );
+        add_action( 'wp_ajax_ai_assistant_rag_index_batch', array( $this, 'ajax_rag_index_batch' ) );
+        add_action( 'wp_ajax_ai_assistant_rag_clear', array( $this, 'ajax_rag_clear' ) );
+        add_action( 'wp_ajax_ai_assistant_rag_delete_post', array( $this, 'ajax_rag_delete_post' ) );
+        add_action( 'wp_ajax_ai_assistant_rag_reindex_post', array( $this, 'ajax_rag_reindex_post' ) );
     }
 
     private function is_real_admin_request() {
@@ -241,6 +245,57 @@ class AI_Assistant_Settings {
                 ),
             ),
 
+            // ───────── RAG (connaissance du site) ─────────
+            'rag' => array(
+                'title'  => 'RAG — Connaissance du site',
+                'fields' => array(
+                    'ai_assistant_enable_rag' => array(
+                        'label'       => 'Activer le RAG',
+                        'type'        => 'bool',
+                        'default'     => 'no',
+                        'sanitize'    => array( __CLASS__, 'sanitize_bool' ),
+                        'description' => 'Lorsqu\'activé, l\'assistant s\'appuie sur le contenu indexé de votre site pour répondre avec précision. Nécessite d\'indexer le contenu depuis <strong>Assistant IA → Indexation RAG</strong>.',
+                    ),
+                    'ai_assistant_rag_embedding_model' => array(
+                        'label'       => 'Modèle d\'embedding',
+                        'type'        => 'select',
+                        'default'     => 'text-embedding-3-small',
+                        'sanitize'    => 'sanitize_text_field',
+                        'options'     => array(
+                            'text-embedding-3-small' => 'text-embedding-3-small (rapide, économique — recommandé)',
+                            'text-embedding-3-large' => 'text-embedding-3-large (plus précis, plus coûteux)',
+                        ),
+                        'description' => 'Modèle OpenAI utilisé pour vectoriser le contenu. Les réponses du chat utilisent le modèle défini dans « Modèle principal ».',
+                    ),
+                    'ai_assistant_rag_post_types' => array(
+                        'label'       => 'Types de contenu à indexer',
+                        'type'        => 'text',
+                        'default'     => 'post,page',
+                        'sanitize'    => 'sanitize_text_field',
+                        'placeholder' => 'post,page',
+                        'description' => 'Liste séparée par des virgules (ex : <code>post,page,product</code>).',
+                    ),
+                    'ai_assistant_rag_chunk_size' => array(
+                        'label'       => 'Taille d\'un chunk (caractères)',
+                        'type'        => 'number',
+                        'default'     => 2000,
+                        'sanitize'    => 'absint',
+                        'min'         => 500,
+                        'max'         => 8000,
+                        'description' => 'Longueur max. d\'un morceau de texte indexé. 2000 = équilibre précision / coût.',
+                    ),
+                    'ai_assistant_rag_max_chunks' => array(
+                        'label'       => 'Nombre de chunks injectés par question',
+                        'type'        => 'number',
+                        'default'     => 5,
+                        'sanitize'    => 'absint',
+                        'min'         => 1,
+                        'max'         => 20,
+                        'description' => 'Les N meilleurs morceaux les plus proches de la question sont passés à l\'IA.',
+                    ),
+                ),
+            ),
+
             // ───────── Recherche web ─────────
             'websearch' => array(
                 'title'  => 'Mots-clés de recherche web',
@@ -290,7 +345,7 @@ class AI_Assistant_Settings {
                         'sanitize'    => 'absint',
                         'min'         => 1,
                         'max'         => 365,
-                        'description' => 'Durée de conservation des fichiers de logs. Les fichiers plus anciens sont supprimés automatiquement.',
+                        'description' => 'Durée de conservation des conversations en base. Au-delà, les entrées sont supprimées automatiquement (tâche planifiée quotidienne).',
                     ),
                 ),
             ),
@@ -310,17 +365,23 @@ class AI_Assistant_Settings {
     }
 
     public function register_settings() {
+        // CRITIQUE : on enregistre chaque onglet dans SON PROPRE option_group.
+        // Sinon l'enregistrement d'un onglet écrase à vide les champs des autres onglets
+        // (bug classique de la Settings API de WordPress).
         foreach ( self::schema() as $section_id => $section ) {
+            $page  = self::PAGE_SLUG . '_tab_' . $section_id;
+            $group = self::OPTION_GROUP . '_' . $section_id;
+
             add_settings_section(
                 'ai_assistant_section_' . $section_id,
-                $section['title'],
+                '',
                 '__return_false',
-                self::PAGE_SLUG
+                $page
             );
 
             foreach ( $section['fields'] as $key => $field ) {
                 register_setting(
-                    self::OPTION_GROUP,
+                    $group,
                     $key,
                     array(
                         'sanitize_callback' => $field['sanitize'],
@@ -332,12 +393,19 @@ class AI_Assistant_Settings {
                     $key,
                     $field['label'],
                     array( $this, 'render_field' ),
-                    self::PAGE_SLUG,
+                    $page,
                     'ai_assistant_section_' . $section_id,
                     array( 'key' => $key, 'field' => $field )
                 );
             }
         }
+    }
+
+    /**
+     * Retourne l'option_group utilisé pour un onglet donné.
+     */
+    private function group_for_tab( $tab ) {
+        return self::OPTION_GROUP . '_' . $tab;
     }
 
     public function render_field( $args ) {
@@ -480,6 +548,346 @@ class AI_Assistant_Settings {
             self::PAGE_SLUG . '-logs',
             array( $this, 'render_logs_page' )
         );
+        add_submenu_page(
+            self::PAGE_SLUG,
+            'Indexation RAG',
+            'Indexation RAG',
+            'manage_options',
+            self::PAGE_SLUG . '-rag',
+            array( $this, 'render_rag_page' )
+        );
+    }
+
+    public function render_rag_page() {
+        if ( ! current_user_can( 'manage_options' ) ) return;
+        if ( ! class_exists( 'AI_Assistant_RAG' ) ) {
+            echo '<div class="wrap"><h1>Indexation RAG</h1><p>Module RAG non chargé.</p></div>';
+            return;
+        }
+        AI_Assistant_RAG::maybe_install();
+
+        $stats      = AI_Assistant_RAG::stats();
+        $enabled    = ( get_option( 'ai_assistant_enable_rag', 'no' ) === 'yes' );
+        $api_key    = (string) get_option( 'ai_assistant_api_key', '' );
+        $post_types = AI_Assistant_RAG::allowed_post_types();
+        $nonce      = wp_create_nonce( 'ai_assistant_rag' );
+        ?>
+        <div class="wrap">
+            <h1>Indexation RAG</h1>
+
+            <?php if ( $api_key === '' ) : ?>
+                <div class="notice notice-error"><p>
+                    Aucune clé API OpenAI configurée. Allez dans
+                    <a href="<?php echo esc_url( admin_url( 'admin.php?page=' . self::PAGE_SLUG ) ); ?>">Réglages</a>
+                    avant d'indexer.
+                </p></div>
+            <?php endif; ?>
+
+            <?php if ( ! $enabled ) : ?>
+                <div class="notice notice-warning"><p>
+                    Le RAG est <strong>désactivé</strong>. Vous pouvez indexer sans problème, mais les réponses du chat n'utiliseront pas l'index tant que vous n'aurez pas activé le RAG dans
+                    <a href="<?php echo esc_url( admin_url( 'admin.php?page=' . self::PAGE_SLUG ) ); ?>">Réglages → RAG</a>.
+                </p></div>
+            <?php endif; ?>
+
+            <div style="background:#fff; border:1px solid #c3c4c7; padding:15px 20px; margin:15px 0; border-radius:4px;">
+                <h2 style="margin-top:0;">État de l'index</h2>
+                <ul style="margin:0;">
+                    <li><strong>Articles/pages indexés :</strong> <?php echo (int) $stats['posts']; ?></li>
+                    <li><strong>Morceaux (chunks) stockés :</strong> <?php echo (int) $stats['chunks']; ?></li>
+                    <li><strong>Dernière indexation :</strong> <?php echo $stats['last_index'] ? esc_html( $stats['last_index'] ) : '<em>jamais</em>'; ?></li>
+                    <li><strong>Types de contenu configurés :</strong> <code><?php echo esc_html( implode( ', ', $post_types ) ); ?></code></li>
+                </ul>
+            </div>
+
+            <?php
+            // Liste des posts indexés (paginée).
+            $list_page = isset( $_GET['ipage'] ) ? max( 1, (int) $_GET['ipage'] ) : 1;
+            $list = AI_Assistant_RAG::list_indexed( $list_page, 50 );
+            $list_total_pages = max( 1, (int) ceil( $list['total'] / 50 ) );
+            ?>
+            <div style="background:#fff; border:1px solid #c3c4c7; padding:15px 20px; margin:15px 0; border-radius:4px;">
+                <h2 style="margin-top:0;">Contenu indexé (<?php echo (int) $list['total']; ?>)</h2>
+                <?php if ( empty( $list['items'] ) ) : ?>
+                    <p><em>Aucun contenu indexé pour le moment.</em></p>
+                <?php else : ?>
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>Titre</th>
+                            <th style="width:70px;">Type</th>
+                            <th style="width:60px;">Chunks</th>
+                            <th style="width:140px;">Indexé le</th>
+                            <th style="width:200px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ai-rag-list-body">
+                        <?php foreach ( $list['items'] as $it ) : ?>
+                            <tr data-post-id="<?php echo (int) $it['post_id']; ?>">
+                                <td>
+                                    <?php if ( $it['exists'] && $it['permalink'] ) : ?>
+                                        <a href="<?php echo esc_url( $it['permalink'] ); ?>" target="_blank"><?php echo esc_html( $it['title'] ); ?></a>
+                                    <?php else : ?>
+                                        <em><?php echo esc_html( $it['title'] ); ?></em>
+                                    <?php endif; ?>
+                                    <?php if ( $it['edit_link'] ) : ?>
+                                        <a href="<?php echo esc_url( $it['edit_link'] ); ?>" class="row-actions" style="margin-left:8px;">éditer</a>
+                                    <?php endif; ?>
+                                </td>
+                                <td><code><?php echo esc_html( $it['post_type'] ); ?></code></td>
+                                <td><?php echo (int) $it['chunks']; ?></td>
+                                <td><?php echo esc_html( $it['indexed_at'] ); ?></td>
+                                <td>
+                                    <button type="button" class="button button-small ai-rag-reindex" data-id="<?php echo (int) $it['post_id']; ?>">Ré-indexer</button>
+                                    <button type="button" class="button button-small button-link-delete ai-rag-delete" data-id="<?php echo (int) $it['post_id']; ?>">Retirer</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <?php if ( $list_total_pages > 1 ) :
+                    $base = add_query_arg( array( 'page' => self::PAGE_SLUG . '-rag' ), admin_url( 'admin.php' ) );
+                ?>
+                    <div class="tablenav" style="margin-top:10px;"><div class="tablenav-pages">
+                        <?php echo paginate_links( array(
+                            'base'      => add_query_arg( 'ipage', '%#%', $base ),
+                            'format'    => '',
+                            'current'   => $list_page,
+                            'total'     => $list_total_pages,
+                            'prev_text' => '‹',
+                            'next_text' => '›',
+                        ) ); ?>
+                    </div></div>
+                <?php endif; ?>
+                <?php endif; ?>
+            </div>
+
+            <div style="background:#fff; border:1px solid #c3c4c7; padding:15px 20px; margin:15px 0; border-radius:4px;">
+                <h2 style="margin-top:0;">Actions</h2>
+                <p>
+                    <button type="button" id="ai-rag-index-btn" class="button button-primary" <?php echo $api_key === '' ? 'disabled' : ''; ?>>Indexer tout le site maintenant</button>
+                    <button type="button" id="ai-rag-clear-btn" class="button">Vider l'index</button>
+                </p>
+                <div id="ai-rag-progress" style="margin-top:15px;"></div>
+                <p class="description" style="margin-top:15px;">
+                    L'indexation consomme votre quota OpenAI (API embeddings). Coût approximatif :
+                    <strong>~0,02 $ pour 100 pages de contenu moyen</strong> avec <code>text-embedding-3-small</code>.
+                    Une fois activé, chaque modification d'article est re-indexée automatiquement.
+                </p>
+            </div>
+        </div>
+
+        <script>
+        jQuery(function($){
+            var nonce = '<?php echo esc_js( $nonce ); ?>';
+            var $progress = $('#ai-rag-progress');
+
+            $('#ai-rag-index-btn').on('click', function(){
+                if (!confirm('Lancer l\'indexation complète du site ? Cela peut prendre quelques minutes.')) return;
+                var $btn = $(this);
+                $btn.prop('disabled', true);
+                $('#ai-rag-clear-btn').prop('disabled', true);
+                $progress.html('<p>Indexation en cours…</p>');
+                runBatch(0, 0, 0);
+            });
+
+            function runBatch(offset, indexedTotal, chunksTotal) {
+                $.ajax({
+                    url: ajaxurl,
+                    method: 'POST',
+                    dataType: 'json',
+                    data: {
+                        action: 'ai_assistant_rag_index_batch',
+                        _wpnonce: nonce,
+                        offset: offset,
+                        batch: 3
+                    }
+                }).done(function(resp){
+                    if (!resp || !resp.success) {
+                        var m = (resp && resp.data && resp.data.message) || 'Erreur inconnue';
+                        $progress.html('<p class="notice notice-error" style="padding:10px;">Échec : ' + $('<div>').text(m).html() + '</p>');
+                        $('#ai-rag-index-btn, #ai-rag-clear-btn').prop('disabled', false);
+                        return;
+                    }
+                    indexedTotal += resp.data.indexed;
+                    chunksTotal  += resp.data.chunks;
+                    var total    = resp.data.total;
+                    var nextOff  = resp.data.next_offset;
+                    var pct      = total > 0 ? Math.round((nextOff / total) * 100) : 100;
+
+                    $progress.html(
+                        '<p>Progression : <strong>' + pct + '%</strong> — ' +
+                        indexedTotal + ' / ' + total + ' articles, ' +
+                        chunksTotal + ' chunks créés</p>' +
+                        '<div style="background:#eee; height:10px; border-radius:5px; overflow:hidden;">' +
+                        '<div style="background:#2271b1; height:100%; width:' + pct + '%;"></div></div>'
+                    );
+
+                    if (nextOff >= total) {
+                        $progress.append('<p style="color:#008a20;"><strong>✓ Indexation terminée.</strong></p>');
+                        $('#ai-rag-index-btn, #ai-rag-clear-btn').prop('disabled', false);
+                        setTimeout(function(){ location.reload(); }, 1500);
+                    } else {
+                        runBatch(nextOff, indexedTotal, chunksTotal);
+                    }
+                }).fail(function(xhr){
+                    var raw = (xhr && xhr.responseText) || '';
+                    $progress.html('<p class="notice notice-error" style="padding:10px;">Échec réseau : ' + $('<div>').text(raw.substring(0,500)).html() + '</p>');
+                    $('#ai-rag-index-btn, #ai-rag-clear-btn').prop('disabled', false);
+                });
+            }
+
+            // Suppression d'un post de l'index.
+            $(document).on('click', '.ai-rag-delete', function(){
+                var $btn = $(this);
+                var pid = $btn.data('id');
+                if (!confirm('Retirer ce contenu de l\'index ? (le post lui-même n\'est PAS supprimé)')) return;
+                $btn.prop('disabled', true);
+                $.post(ajaxurl, {
+                    action: 'ai_assistant_rag_delete_post',
+                    _wpnonce: nonce,
+                    post_id: pid
+                }, null, 'json').done(function(resp){
+                    if (resp && resp.success) {
+                        $btn.closest('tr').fadeOut(200, function(){ $(this).remove(); });
+                    } else {
+                        alert('Erreur : ' + ((resp && resp.data && resp.data.message) || 'inconnue'));
+                        $btn.prop('disabled', false);
+                    }
+                }).fail(function(){
+                    alert('Erreur réseau');
+                    $btn.prop('disabled', false);
+                });
+            });
+
+            // Ré-indexation d'un post.
+            $(document).on('click', '.ai-rag-reindex', function(){
+                var $btn = $(this);
+                var pid = $btn.data('id');
+                var origText = $btn.text();
+                $btn.prop('disabled', true).text('…');
+                $.post(ajaxurl, {
+                    action: 'ai_assistant_rag_reindex_post',
+                    _wpnonce: nonce,
+                    post_id: pid
+                }, null, 'json').done(function(resp){
+                    if (resp && resp.success) {
+                        $btn.text('✓ ' + resp.data.chunks);
+                        setTimeout(function(){ location.reload(); }, 800);
+                    } else {
+                        alert('Erreur : ' + ((resp && resp.data && resp.data.message) || 'inconnue'));
+                        $btn.prop('disabled', false).text(origText);
+                    }
+                }).fail(function(){
+                    alert('Erreur réseau');
+                    $btn.prop('disabled', false).text(origText);
+                });
+            });
+
+            $('#ai-rag-clear-btn').on('click', function(){
+                if (!confirm('Vider complètement l\'index RAG ? Il faudra le recréer.')) return;
+                var $btn = $(this);
+                $btn.prop('disabled', true);
+                $.post(ajaxurl, {
+                    action: 'ai_assistant_rag_clear',
+                    _wpnonce: nonce
+                }, null, 'json').done(function(resp){
+                    if (resp && resp.success) {
+                        $progress.html('<p style="color:#008a20;">Index vidé.</p>');
+                        setTimeout(function(){ location.reload(); }, 800);
+                    } else {
+                        $progress.html('<p class="notice notice-error" style="padding:10px;">Erreur lors du vidage.</p>');
+                        $btn.prop('disabled', false);
+                    }
+                });
+            });
+        });
+        </script>
+        <?php
+    }
+
+    public function ajax_rag_index_batch() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Accès refusé.' ), 403 );
+        }
+        if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'ai_assistant_rag' ) ) {
+            wp_send_json_error( array( 'message' => 'Nonce invalide.' ), 403 );
+        }
+        if ( ! class_exists( 'AI_Assistant_RAG' ) ) {
+            wp_send_json_error( array( 'message' => 'Module RAG indisponible.' ) );
+        }
+
+        $offset = isset( $_POST['offset'] ) ? max( 0, (int) $_POST['offset'] ) : 0;
+        $batch  = isset( $_POST['batch'] ) ? max( 1, min( 20, (int) $_POST['batch'] ) ) : 3;
+
+        $list = AI_Assistant_RAG::list_post_ids( $offset, $batch );
+        $indexed = 0;
+        $chunks  = 0;
+
+        foreach ( $list['ids'] as $pid ) {
+            $result = AI_Assistant_RAG::index_post( $pid );
+            if ( is_wp_error( $result ) ) {
+                wp_send_json_error( array( 'message' => 'Post ' . $pid . ' : ' . $result->get_error_message() ) );
+            }
+            $indexed++;
+            $chunks += (int) $result;
+        }
+
+        wp_send_json_success( array(
+            'indexed'     => $indexed,
+            'chunks'      => $chunks,
+            'next_offset' => $offset + count( $list['ids'] ),
+            'total'       => $list['total'],
+        ) );
+    }
+
+    public function ajax_rag_clear() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Accès refusé.' ), 403 );
+        }
+        if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'ai_assistant_rag' ) ) {
+            wp_send_json_error( array( 'message' => 'Nonce invalide.' ), 403 );
+        }
+        if ( class_exists( 'AI_Assistant_RAG' ) ) {
+            AI_Assistant_RAG::clear_all();
+        }
+        wp_send_json_success();
+    }
+
+    public function ajax_rag_delete_post() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Accès refusé.' ), 403 );
+        }
+        if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'ai_assistant_rag' ) ) {
+            wp_send_json_error( array( 'message' => 'Nonce invalide.' ), 403 );
+        }
+        $post_id = isset( $_POST['post_id'] ) ? (int) $_POST['post_id'] : 0;
+        if ( $post_id <= 0 ) {
+            wp_send_json_error( array( 'message' => 'ID post invalide.' ) );
+        }
+        if ( class_exists( 'AI_Assistant_RAG' ) ) {
+            AI_Assistant_RAG::delete_post_chunks( $post_id );
+        }
+        wp_send_json_success();
+    }
+
+    public function ajax_rag_reindex_post() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Accès refusé.' ), 403 );
+        }
+        if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'ai_assistant_rag' ) ) {
+            wp_send_json_error( array( 'message' => 'Nonce invalide.' ), 403 );
+        }
+        $post_id = isset( $_POST['post_id'] ) ? (int) $_POST['post_id'] : 0;
+        if ( $post_id <= 0 || ! class_exists( 'AI_Assistant_RAG' ) ) {
+            wp_send_json_error( array( 'message' => 'Module RAG indisponible ou ID invalide.' ) );
+        }
+        $result = AI_Assistant_RAG::index_post( $post_id );
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+        }
+        wp_send_json_success( array( 'chunks' => (int) $result ) );
     }
 
     public function render_logs_page() {
@@ -581,25 +989,48 @@ class AI_Assistant_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             return;
         }
+        $schema       = self::schema();
+        $tab_keys     = array_keys( $schema );
+        $current_tab  = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : $tab_keys[0];
+        if ( ! in_array( $current_tab, $tab_keys, true ) ) {
+            $current_tab = $tab_keys[0];
+        }
         $test_nonce = wp_create_nonce( 'ai_assistant_test_openai' );
+        $page_for_tab = self::PAGE_SLUG . '_tab_' . $current_tab;
         ?>
         <div class="wrap">
             <h1>Réglages de l'Assistant IA</h1>
-            <p class="description">Tous les paramètres du chatbot, regroupés par section.</p>
 
-            <div style="background:#fff; border:1px solid #c3c4c7; padding:15px 20px; margin:15px 0; border-radius:4px;">
-                <h2 style="margin-top:0;">Test de la connexion OpenAI</h2>
-                <p>Vérifie que la clé API et le modèle configurés fonctionnent réellement.</p>
-                <button type="button" id="ai-assistant-test-btn" class="button button-primary">Tester maintenant</button>
-                <button type="button" id="ai-assistant-reset-rl-btn" class="button" style="margin-left:10px;">Réinitialiser le compteur anti-abus</button>
-                <span id="ai-assistant-test-spinner" class="spinner" style="float:none; margin-left:10px;"></span>
-                <div id="ai-assistant-test-result" style="margin-top:15px;"></div>
-            </div>
+            <h2 class="nav-tab-wrapper">
+                <?php foreach ( $schema as $tab_id => $tab ) :
+                    $url = add_query_arg( array( 'page' => self::PAGE_SLUG, 'tab' => $tab_id ), admin_url( 'admin.php' ) );
+                    $class = ( $tab_id === $current_tab ) ? 'nav-tab nav-tab-active' : 'nav-tab';
+                ?>
+                    <a href="<?php echo esc_url( $url ); ?>" class="<?php echo esc_attr( $class ); ?>">
+                        <?php echo esc_html( $tab['title'] ); ?>
+                    </a>
+                <?php endforeach; ?>
+            </h2>
+
+            <?php if ( $current_tab === 'api' ) : ?>
+                <div style="background:#fff; border:1px solid #c3c4c7; padding:15px 20px; margin:15px 0; border-radius:4px;">
+                    <h2 style="margin-top:0;">Test de la connexion OpenAI</h2>
+                    <p>Vérifie que la clé API et le modèle configurés fonctionnent réellement.</p>
+                    <button type="button" id="ai-assistant-test-btn" class="button button-primary">Tester maintenant</button>
+                    <button type="button" id="ai-assistant-reset-rl-btn" class="button" style="margin-left:10px;">Réinitialiser le compteur anti-abus</button>
+                    <span id="ai-assistant-test-spinner" class="spinner" style="float:none; margin-left:10px;"></span>
+                    <div id="ai-assistant-test-result" style="margin-top:15px;"></div>
+                </div>
+            <?php endif; ?>
 
             <form method="post" action="options.php">
                 <?php
-                settings_fields( self::OPTION_GROUP );
-                do_settings_sections( self::PAGE_SLUG );
+                // IMPORTANT : settings_fields utilise le group SPÉCIFIQUE à l'onglet.
+                // Cela garantit que seules les options de cet onglet sont traitées,
+                // les autres onglets restent intacts.
+                settings_fields( $this->group_for_tab( $current_tab ) );
+                do_settings_sections( $page_for_tab );
+                echo '<input type="hidden" name="_wp_http_referer" value="' . esc_attr( add_query_arg( array( 'page' => self::PAGE_SLUG, 'tab' => $current_tab ), admin_url( 'admin.php' ) ) ) . '" />';
                 submit_button( 'Enregistrer les modifications' );
                 ?>
             </form>
