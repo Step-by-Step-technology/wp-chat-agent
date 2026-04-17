@@ -63,6 +63,9 @@ class AI_Assistant_Assets {
             'persistenceTtlMs'  => max( 5, (int) AI_Assistant_Settings::get( 'ai_assistant_chat_persistence_ttl' ) ) * 60 * 1000,
             'maxHistory'        => (int) AI_Assistant_Settings::get( 'ai_assistant_max_history' ),
             'showCredit'        => AI_Assistant_Settings::get( 'ai_assistant_show_credit' ),
+            'chatWidth'         => (int) ( AI_Assistant_Settings::get( 'ai_assistant_chat_width' ) ?: 460 ),
+            'chatHeight'        => (int) ( AI_Assistant_Settings::get( 'ai_assistant_chat_height' ) ?: 700 ),
+            'customIconUrl'     => AI_Assistant_Settings::get( 'ai_assistant_custom_icon' ),
             'i18n'              => array(
                 'typing'         => 'L\'assistant écrit…',
                 'errorGeneric'   => 'Désolé, une erreur est survenue.',
@@ -79,6 +82,8 @@ class AI_Assistant_Assets {
 
     private function generate_dynamic_css( $primary_color ) {
         $primary_color = $primary_color ?: '#10b981';
+        $chat_width    = max( 300, min( 800, (int) ( AI_Assistant_Settings::get( 'ai_assistant_chat_width' ) ?: 460 ) ) );
+        $chat_height   = max( 400, min( 900, (int) ( AI_Assistant_Settings::get( 'ai_assistant_chat_height' ) ?: 700 ) ) );
         $darken        = $this->darken_color( $primary_color, 20 );
         $rgba          = $this->hex_to_rgba( $primary_color, 0.4 );
         $rgba_dark     = $this->hex_to_rgba( $primary_color, 0.6 );
@@ -96,6 +101,9 @@ class AI_Assistant_Assets {
             .step-by-step-credit a { color: {$primary_color}; }
             .step-by-step-credit a:hover { color: {$darken}; }
             .bubble-icon { {$filter} }
+            @media (min-width: 481px) {
+                #ai-chat-widget { width: {$chat_width}px; height: {$chat_height}px; }
+            }
         ";
     }
 

@@ -137,10 +137,11 @@ jQuery(function ($) {
         var pluginUrl = cfg.pluginUrl || '';
         var siteName  = escapeHtml(cfg.siteName || 'Assistant');
         var placeholder = escapeHtml(cfg.inputPlaceholder || 'Tapez votre question ici…');
+        var iconUrl   = cfg.customIconUrl || (pluginUrl + 'assets/generative.png');
 
         $('body').append(
             '<div id="ai-chat-bubble">' +
-                '<img src="' + pluginUrl + 'assets/generative.png" class="bubble-icon" alt="Assistant" />' +
+                '<img src="' + iconUrl + '" class="bubble-icon" alt="Assistant" />' +
             '</div>'
         );
 
@@ -160,7 +161,7 @@ jQuery(function ($) {
         $('body').append(
             '<div id="ai-chat-widget" style="display:none;">' +
                 '<div class="chat-header">' +
-                    '<span class="chat-title">Assistant <img src="' + pluginUrl + 'assets/generative.png" class="header-icon" alt="IA" /> ' + siteName + '</span>' +
+                    '<span class="chat-title">Assistant <img src="' + iconUrl + '" class="header-icon" alt="IA" /> ' + siteName + '</span>' +
                     '<span class="close-chat">&times;</span>' +
                 '</div>' +
                 '<div class="chat-messages"></div>' +

@@ -154,6 +154,31 @@ class AI_Assistant_Settings {
                         'sanitize'    => 'sanitize_hex_color',
                         'description' => 'Couleur de la bulle, de l\'en-tête et des boutons.',
                     ),
+                    'ai_assistant_chat_width' => array(
+                        'label'       => 'Largeur de la fenêtre de chat (px)',
+                        'type'        => 'number',
+                        'default'     => 460,
+                        'sanitize'    => 'absint',
+                        'min'         => 300,
+                        'max'         => 800,
+                        'description' => 'Largeur en pixels sur desktop (300–800 px). Par défaut : 460.',
+                    ),
+                    'ai_assistant_chat_height' => array(
+                        'label'       => 'Hauteur de la fenêtre de chat (px)',
+                        'type'        => 'number',
+                        'default'     => 700,
+                        'sanitize'    => 'absint',
+                        'min'         => 400,
+                        'max'         => 900,
+                        'description' => 'Hauteur en pixels sur desktop (400–900 px). Par défaut : 700.',
+                    ),
+                    'ai_assistant_custom_icon' => array(
+                        'label'       => 'Icône IA personnalisée',
+                        'type'        => 'media',
+                        'default'     => '',
+                        'sanitize'    => array( __CLASS__, 'sanitize_icon_url' ),
+                        'description' => 'Choisissez une icône dans la bibliothèque ou importez un PNG 256×256 px. Laissez vide pour l\'icône par défaut.',
+                    ),
                 ),
             ),
 
@@ -502,6 +527,68 @@ class AI_Assistant_Settings {
                     intval( $rows ),
                     esc_textarea( $value )
                 );
+                break;
+
+            case 'media':
+                $icons = self::get_icon_library();
+                $lib_selected = '';
+                foreach ( $icons as $icon_key => $icon ) {
+                    if ( $value === 'data:image/svg+xml;base64,' . base64_encode( $icon['svg'] ) ) {
+                        $lib_selected = $icon_key;
+                        break;
+                    }
+                }
+                $is_custom_upload = $value && ! $lib_selected;
+                $default_icon_url = AI_ASSISTANT_URL . 'assets/generative.png';
+                $default_sel      = ( ! $value ) ? ' ai-icon-selected' : '';
+                ?>
+                <div class="ai-icon-field">
+                    <p class="ai-icon-section-title"><strong>Bibliothèque d'icônes</strong></p>
+                    <div class="ai-icon-grid">
+                        <button type="button"
+                                class="ai-icon-btn<?php echo $default_sel; ?>"
+                                data-uri=""
+                                data-target="<?php echo esc_attr( $key ); ?>"
+                                title="Icône par défaut">
+                            <img src="<?php echo esc_url( $default_icon_url ); ?>" alt="Défaut" />
+                            <span>Défaut</span>
+                        </button>
+                        <?php foreach ( $icons as $icon_key => $icon ) :
+                            $uri = 'data:image/svg+xml;base64,' . base64_encode( $icon['svg'] );
+                            $sel = ( $lib_selected === $icon_key ) ? ' ai-icon-selected' : '';
+                        ?>
+                        <button type="button"
+                                class="ai-icon-btn<?php echo $sel; ?>"
+                                data-uri="<?php echo esc_attr( $uri ); ?>"
+                                data-target="<?php echo esc_attr( $key ); ?>"
+                                title="<?php echo esc_attr( $icon['label'] ); ?>">
+                            <img src="<?php echo esc_attr( $uri ); ?>" alt="<?php echo esc_attr( $icon['label'] ); ?>" />
+                            <span><?php echo esc_html( $icon['label'] ); ?></span>
+                        </button>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="ai-icon-or"><span>ou importer une image personnalisée (PNG 256×256 px)</span></div>
+                    <div class="ai-icon-upload-row">
+                        <img class="ai-icon-upload-preview"
+                             src="<?php echo esc_attr( $is_custom_upload ? $value : '' ); ?>"
+                             <?php echo $is_custom_upload ? '' : 'style="display:none;"'; ?>
+                             alt="" />
+                        <button type="button" class="button ai-icon-upload-btn"
+                                data-target="<?php echo esc_attr( $key ); ?>">
+                            <?php echo $is_custom_upload ? 'Changer l\'image' : 'Choisir une image'; ?>
+                        </button>
+                        <button type="button" class="button ai-icon-clear-upload"
+                                data-target="<?php echo esc_attr( $key ); ?>"
+                                <?php echo $is_custom_upload ? '' : 'style="display:none;"'; ?>>
+                            Supprimer l'image
+                        </button>
+                    </div>
+                    <input type="hidden"
+                           name="<?php echo esc_attr( $key ); ?>"
+                           id="<?php echo esc_attr( $key ); ?>"
+                           value="<?php echo esc_attr( $value ); ?>" />
+                </div>
+                <?php
                 break;
 
             case 'themes':
@@ -1250,12 +1337,127 @@ class AI_Assistant_Settings {
             'wp-color-picker',
             'jQuery(function($){ $(".ai-assistant-color-picker").wpColorPicker(); });'
         );
+
+        wp_enqueue_media();
+        wp_add_inline_style( 'wp-color-picker', '
+            .ai-icon-field { max-width: 620px; }
+            .ai-icon-section-title { margin: 0 0 8px; }
+            .ai-icon-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+            .ai-icon-btn {
+                width: 72px; height: 76px; padding: 6px 4px 4px;
+                border: 2px solid #ddd !important; border-radius: 6px;
+                background: #fff !important; cursor: pointer;
+                display: inline-flex; flex-direction: column;
+                align-items: center; justify-content: center; gap: 4px;
+                transition: border-color .15s, box-shadow .15s;
+                box-shadow: none !important; line-height: 1;
+            }
+            .ai-icon-btn:hover { border-color: #10b981 !important; }
+            .ai-icon-btn.ai-icon-selected {
+                border-color: #10b981 !important;
+                box-shadow: 0 0 0 3px rgba(16,185,129,.25) !important;
+                background: #f0fdf9 !important;
+            }
+            .ai-icon-btn img { width: 32px; height: 32px; object-fit: contain; pointer-events: none; }
+            .ai-icon-btn span { font-size: 10px; color: #555; text-align: center; line-height: 1.2; pointer-events: none; }
+            .ai-icon-or { display: flex; align-items: center; gap: 8px; margin: 14px 0 10px; color: #888; font-size: 12px; }
+            .ai-icon-or::before, .ai-icon-or::after { content: ""; flex: 1; height: 1px; background: #ddd; }
+            .ai-icon-upload-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+            .ai-icon-upload-preview { width: 64px; height: 64px; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; background: #f9f9f9; }
+        ' );
+        wp_add_inline_script( 'wp-color-picker', "
+jQuery(function($){
+    $(document).on('click', '.ai-icon-btn', function(e){
+        e.preventDefault();
+        var \$btn     = $(this);
+        var targetId = \$btn.data('target');
+        var uri      = \$btn.data('uri');
+        $('#' + targetId).val(uri);
+        \$btn.closest('.ai-icon-grid').find('.ai-icon-btn').removeClass('ai-icon-selected');
+        \$btn.addClass('ai-icon-selected');
+        var \$field = \$btn.closest('.ai-icon-field');
+        \$field.find('.ai-icon-upload-preview').attr('src','').hide();
+        \$field.find('.ai-icon-clear-upload').hide();
+        \$field.find('.ai-icon-upload-btn').text('Choisir une image');
+    });
+
+    $(document).on('click', '.ai-icon-upload-btn', function(e){
+        e.preventDefault();
+        var \$btn     = $(this);
+        var targetId = \$btn.data('target');
+        var frame    = wp.media({ title: 'Choisir une image', button: { text: 'Utiliser cette image' }, multiple: false, library: { type: 'image' } });
+        frame.on('select', function(){
+            var att = frame.state().get('selection').first().toJSON();
+            $('#' + targetId).val(att.url);
+            var \$field = \$btn.closest('.ai-icon-field');
+            \$field.find('.ai-icon-upload-preview').attr('src', att.url).show();
+            \$field.find('.ai-icon-clear-upload').show();
+            \$btn.text('Changer l\\'image');
+            \$field.find('.ai-icon-btn').removeClass('ai-icon-selected');
+        });
+        frame.open();
+    });
+
+    $(document).on('click', '.ai-icon-clear-upload', function(e){
+        e.preventDefault();
+        var \$btn     = $(this);
+        var targetId = \$btn.data('target');
+        $('#' + targetId).val('');
+        var \$field = \$btn.closest('.ai-icon-field');
+        \$field.find('.ai-icon-upload-preview').attr('src','').hide();
+        \$btn.hide();
+        \$field.find('.ai-icon-upload-btn').text('Choisir une image');
+    });
+});
+        " );
+    }
+
+    // ───────── Bibliothèque d'icônes ─────────
+
+    private static function get_icon_library() {
+        $base = ' xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"'
+              . ' stroke="#1e293b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
+        $svg  = function ( $inner ) use ( $base ) {
+            return '<svg' . $base . '>' . $inner . '</svg>';
+        };
+        return array(
+            'robot'    => array( 'label' => 'Robot',      'svg' => $svg( '<rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 2v6"/><circle cx="12" cy="2" r="1" fill="#1e293b" stroke="none"/><circle cx="9" cy="14" r="1.5"/><circle cx="15" cy="14" r="1.5"/><path d="M9 18h6"/><path d="M3 13h2m14 0h2"/>' ) ),
+            'sparkle'  => array( 'label' => 'Étincelle',  'svg' => $svg( '<path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5z"/><path d="M5 5l.8.8M18.2 5l.8-.8M5 19l.8-.8M18.2 19l.8.8"/>' ) ),
+            'brain'    => array( 'label' => 'Cerveau',    'svg' => $svg( '<path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24A2.5 2.5 0 0 0 14.5 2z"/>' ) ),
+            'chip'     => array( 'label' => 'Puce IA',    'svg' => $svg( '<rect x="7" y="7" width="10" height="10" rx="1"/><path d="M7 9H5m0 3H3m2 3H5M17 9h2m0 3h2m-2 3h2M9 7V5m3 0V3m3 2V5M9 17v2m3 0v2m3-2v2"/>' ) ),
+            'lightning'=> array( 'label' => 'Éclair',     'svg' => $svg( '<path d="M13 2L3 14h9l-1 8 10-12h-9z"/>' ) ),
+            'atom'     => array( 'label' => 'Atome',      'svg' => $svg( '<circle cx="12" cy="12" r="1.5" fill="#1e293b" stroke="none"/><ellipse cx="12" cy="12" rx="10" ry="3.5"/><ellipse cx="12" cy="12" rx="10" ry="3.5" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="3.5" transform="rotate(120 12 12)"/>' ) ),
+            'wand'     => array( 'label' => 'Baguette',   'svg' => $svg( '<path d="M3 21 12.5 11.5"/><path d="M9.5 11.5 15 6l3 3-5.5 5.5"/><path d="M16 2l.6 1.4L18 4l-1.4.6L16 6l-.6-1.4L14 4l1.4-.6z"/>' ) ),
+            'message'  => array( 'label' => 'Message IA', 'svg' => $svg( '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10l1.5 2.5 1-3 1.5 4 1-2.5L14.5 12"/>' ) ),
+            'rocket'   => array( 'label' => 'Fusée',      'svg' => $svg( '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>' ) ),
+            'star'     => array( 'label' => 'Étoile',     'svg' => $svg( '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>' ) ),
+            'infinity' => array( 'label' => 'Infini',     'svg' => $svg( '<path d="M12 12c-2-2.5-4-4-6-4a4 4 0 0 0 0 8c2 0 4-1.5 6-4z"/><path d="M12 12c2 2.5 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.5-6 4z"/>' ) ),
+            'eye'      => array( 'label' => 'Vision IA',  'svg' => $svg( '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>' ) ),
+            'globe'    => array( 'label' => 'Monde',      'svg' => $svg( '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>' ) ),
+            'diamond'  => array( 'label' => 'Diamant',    'svg' => $svg( '<path d="M6 3h12l4 6-10 13L2 9z"/><line x1="2" y1="9" x2="22" y2="9"/><path d="M12 3l4 6-4 13-4-13z"/>' ) ),
+            'shield'   => array( 'label' => 'Sécurité',   'svg' => $svg( '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>' ) ),
+            'flame'    => array( 'label' => 'Flamme',     'svg' => $svg( '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 3z"/>' ) ),
+        );
     }
 
     // ───────── Sanitizers ─────────
 
     public static function sanitize_bool( $value ) {
         return ( $value === 'yes' ) ? 'yes' : 'no';
+    }
+
+    public static function sanitize_icon_url( $value ) {
+        if ( empty( $value ) ) {
+            return '';
+        }
+        if ( strpos( $value, 'data:image/svg+xml;base64,' ) === 0 ) {
+            $b64 = substr( $value, strlen( 'data:image/svg+xml;base64,' ) );
+            if ( base64_decode( $b64, true ) !== false ) {
+                return $value;
+            }
+            return '';
+        }
+        return esc_url_raw( $value );
     }
 
     public static function sanitize_keywords( $input ) {
